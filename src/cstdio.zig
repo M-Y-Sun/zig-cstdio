@@ -26,7 +26,7 @@ fn totype(format: []const u8) type {
     // }
 }
 
-pub fn c_fscanf(reader: anytype, format: []const u8, args: anytype) !usize {
+pub fn fscanf(reader: anytype, format: []const u8, args: anytype) !usize {
     const args_type = @TypeOf(args);
     const args_type_info = @typeInfo(args_type);
 
@@ -63,11 +63,4 @@ pub fn c_fscanf(reader: anytype, format: []const u8, args: anytype) !usize {
     }
 
     return 0;
-}
-
-pub fn main() !void {
-    var n: i32 = 0;
-    _ = try c_fscanf(stdin, "%d", .{&n});
-
-    try stdout.print("{}\n", .{n});
 }
