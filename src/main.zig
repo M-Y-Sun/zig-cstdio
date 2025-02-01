@@ -10,11 +10,14 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    var n: i32 = 0;
-    var m: i32 = 0;
-    _ = try cio.fscanf(stdin, "%d%d", .{ &n, &m });
+    var usz: usize = undefined;
+    var ldouble: f80 = undefined;
+    var ll: i64 = undefined;
+    var ushort: u16 = undefined;
+    var str: []const u8 = "default";
+    _ = try cio.fscanf(stdin, "%zd%Lf%lld%hu%s", .{ &usz, &ldouble, &ll, &ushort, &str });
 
-    try stdout.print("{} {}\n", .{ n, m });
+    try stdout.print("{}\n{}\n{}\n{}\n{s}\n", .{ usz, ldouble, ll, ushort, str });
 
     try bw.flush();
 }

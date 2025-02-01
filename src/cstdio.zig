@@ -1,6 +1,4 @@
 const std = @import("std");
-const stdout = std.io.getStdOut().writer();
-const stdin = std.io.getStdIn().reader();
 
 fn readw(buf: []u8, reader: anytype) !usize {
     var i: usize = 0;
@@ -9,8 +7,9 @@ fn readw(buf: []u8, reader: anytype) !usize {
     while (i < buf.len) : (i += 1) {
         c = try reader.readByte();
 
-        if (c == ' ' or c == '\n' or c == '\r')
+        if (c == ' ' or c == '\n' or c == '\r') {
             break;
+        }
 
         buf[i] = c;
     }
@@ -18,48 +17,189 @@ fn readw(buf: []u8, reader: anytype) !usize {
     return i;
 }
 
-fn totype(format: []const u8) type {
-    _ = format;
-    return i32;
-    // for (format) |c| {
-    //     switch (c) {}
-    // }
+// TODO: Add hex and octal
+fn totype(comptime format: []const u8) ?type {
+    // parse int width prefix
+
+    comptime var ibits: comptime_int = -1;
+    comptime var lf = false;
+    comptime var wchar = false;
+    comptime var ptrtype = false;
+
+    comptime var next: comptime_int = 1;
+
+    switch (format[0]) {
+        'h' => {
+            ibits = 16;
+
+            if (format.len > 1 and format[1] == 'h') {
+                ibits >>= 1;
+                next = 2;
+            }
+        },
+        'l' => {
+            ibits = 32;
+
+            if (format.len > 1) {
+                if (format[1] == 'l') {
+                    ibits <<= 1;
+                    next = 2;
+                } else if (format[1] == 's' or format[1] == 'c') {
+                    wchar = true;
+                    ibits = -1;
+                }
+            }
+        },
+        'L' => {
+            lf = true;
+        },
+        'j' => {
+            ibits = 128;
+        },
+        't', 'z' => {
+            ptrtype = true;
+        },
+        0 => {
+            return null;
+        },
+        else => {
+            next -= 1;
+        },
+    }
+
+    if (next >= format.len) {
+        return null;
+    }
+
+    // parse specifier
+
+    const c = format[next];
+
+    // TODO: implement 'i', 'o', and 'x'/'X'
+    // TODO: implement %n to store number of characters
+    switch (c) {
+        'd', 'u' => {
+            if (ptrtype) {
+                return if (c == 'd') isize else usize;
+            }
+
+            switch (ibits) {
+                8 => {
+                    return if (c == 'd') i8 else u8;
+                },
+                16 => {
+                    return if (c == 'd') i16 else u16;
+                },
+                32, -1 => {
+                    return if (c == 'd') i32 else u32;
+                },
+                64 => {
+                    return if (c == 'd') i64 else u64;
+                },
+                128 => {
+                    return if (c == 'd') i128 else u128;
+                },
+                else => {
+                    @compileError("invalid flag prefix, found " ++ ibits);
+                },
+            }
+        },
+        // TODO: implement strtod conversion
+        'a', 'A', 'e', 'E', 'f', 'F', 'g', 'G' => {
+            return if (lf) f80 else f64;
+        },
+        's' => {
+            return if (wchar) []const u32 else []const u8;
+        },
+        'S' => {
+            return []const u32;
+        },
+        'c' => {
+            return if (wchar) u32 else u8;
+        },
+        'C' => {
+            return u32;
+        },
+        'p' => {
+            return isize;
+        },
+        else => {
+            @compileError("invalid format specifier, found " ++ c);
+        },
+    }
 }
 
-pub fn fscanf(reader: anytype, format: []const u8, args: anytype) !usize {
+pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usize {
     const args_type = @TypeOf(args);
     const args_type_info = @typeInfo(args_type);
 
-    if (args_type_info != .Struct)
+    if (args_type_info != .Struct) {
         @compileError("expected tuple or struct argument, found " ++ @typeName(args_type));
+    }
 
-    const state_ = struct {
-        var buf: [4096]u8 = undefined;
-        var fbuf: [8]u8 = undefined;
-        var flen: usize = 0;
-    };
+    var buf: [4096]u8 = undefined;
+    comptime var fbuf: [8]u8 = undefined;
+    comptime var flen: usize = 0;
 
-    var i: usize = 0;
+    comptime var i: usize = 0;
 
     while (i < format.len and format[i] != '%') : (i += 1) {}
 
+    var args_read: usize = 0;
+
     inline for (&args) |*arg| {
-        state_.flen = 0;
+        flen = 0;
         i += 1;
 
-        while (i < format.len and format[i] != '%') : (i += 1) {
-            state_.fbuf[state_.flen] = format[i];
-            state_.flen += 1;
+        // TODO: deal with %%
+
+        inline while (i < format.len and format[i] != '%') : (i += 1) {
+            fbuf[flen] = format[i];
+            flen += 1;
         }
 
-        const len = try readw(&state_.buf, reader);
+        // maximum field width
 
-        switch (@typeInfo(totype(&state_.fbuf))) {
-            .Int => {
-                arg.*.* = try std.fmt.parseInt(totype(&state_.fbuf), state_.buf[0..len], 10);
-            },
-            else => {},
+        comptime var maxbytes: usize = 0;
+        comptime var unspecified = true;
+
+        inline while (fbuf[maxbytes] >= '0' and fbuf[maxbytes] <= '9') : (maxbytes += 1) {
+            unspecified = false;
+            if (maxbytes >= fbuf.len)
+                return args_read;
         }
+
+        // parse format specifier
+
+        var len = try readw(&buf, reader);
+
+        if (!unspecified)
+            len = @min(len, maxbytes);
+
+        const fmt_type = totype(fbuf[0..flen]);
+
+        args_read = args_read;
+        _ = arg;
+
+        if (fmt_type == null) {
+            std.debug.print("null\n", .{});
+        } else {
+            std.debug.print("{any}\n", .{fmt_type.?});
+        }
+
+        // if (fmt_type == null)
+        //     return args_read;
+        //
+        // switch (@typeInfo(fmt_type.?)) {
+        //     .Int => {
+        //         arg.*.* = try std.fmt.parseInt(totype(&fbuf), buf[0..len], 10);
+        //     },
+        //     else => {
+        //         @compileError("invalid type, found " ++ @typeName(fmt_type));
+        //     },
+        // }
+        //
+        // args_read += 1;
     }
 
     return 0;
