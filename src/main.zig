@@ -11,9 +11,10 @@ pub fn main() !void {
     const stdout = bw.writer();
 
     var n: i32 = 0;
-    _ = try cio.fscanf(stdin, "%d", .{&n});
+    var m: i32 = 0;
+    _ = try cio.fscanf(stdin, "%d%d", .{ &n, &m });
 
-    try stdout.print("{}\n", .{n});
+    try stdout.print("{} {}\n", .{ n, m });
 
     try bw.flush();
 }
