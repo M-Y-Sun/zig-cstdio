@@ -17,8 +17,14 @@ fn readw(buf: []u8, reader: anytype) !usize {
     return i;
 }
 
+const fmtspec_t = struct {
+    ftype: type = void,
+    base: u8 = 10,
+    len: ?usize = null, // TODO: implement
+};
+
 // TODO: Add hex and octal
-fn totype(comptime format: []const u8) ?type {
+fn totype(comptime format: []const u8) ?fmtspec_t {
     // parse int width prefix
 
     comptime var ibits: comptime_int = -1;
@@ -73,72 +79,79 @@ fn totype(comptime format: []const u8) ?type {
 
     // parse specifier
 
+    comptime var ret: fmtspec_t = .{};
     const c = format[next];
 
     // TODO: implement 'i', 'o', and 'x'/'X'
     // TODO: implement %n to store number of characters
+    // TODO: add format specifier for binary (doesnt exist in scanf) and throw compiler warning
     switch (c) {
-        'd', 'u' => {
+        'd', 'u', 'i', 'o', 'x', 'X' => blk: {
             if (ptrtype) {
-                return if (c == 'd') isize else usize;
+                ret.ftype = if (c == 'd') isize else usize;
+                break :blk;
             }
 
-            switch (ibits) {
-                8 => {
-                    return if (c == 'd') i8 else u8;
-                },
-                16 => {
-                    return if (c == 'd') i16 else u16;
-                },
-                32, -1 => {
-                    return if (c == 'd') i32 else u32;
-                },
-                64 => {
-                    return if (c == 'd') i64 else u64;
-                },
-                128 => {
-                    return if (c == 'd') i128 else u128;
-                },
+            ret.base = switch (c) {
+                'i' => 0, // auto-detect base
+                'o' => 8,
+                'x', 'X' => 16,
+                else => 10,
+            };
+
+            ret.ftype = switch (ibits) {
+                8 => if (c == 'd') i8 else u8,
+                16 => if (c == 'd') i16 else u16,
+                32, -1 => if (c == 'd') i32 else u32,
+                64 => if (c == 'd') i64 else u64,
+                128 => if (c == 'd') i128 else u128,
                 else => {
                     @compileError("invalid flag prefix, found " ++ ibits);
                 },
-            }
+            };
         },
         // TODO: implement strtod conversion
         'a', 'A', 'e', 'E', 'f', 'F', 'g', 'G' => {
             // return if (lf) f80 else f64;
-            return f64; // parseFloat for f80 is not supported yet
+            ret.ftype = f64; // parseFloat for f80 is not supported yet
         },
         's' => {
-            return if (wchar) []const u32 else []const u8;
+            ret.ftype = if (wchar) []const u32 else []const u8;
         },
         'S' => {
-            return []const u32;
+            ret.ftype = []const u32;
         },
         'c' => {
-            return if (wchar) u32 else u8;
+            ret.ftype = if (wchar) u32 else u8;
         },
         'C' => {
-            return u32;
+            ret.ftype = u32;
         },
         'p' => {
-            return isize;
+            ret.ftype = isize;
         },
         else => {
             @compileError("invalid format specifier, found " ++ c);
         },
     }
+
+    return ret;
 }
 
-pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usize {
-    const args_type = @TypeOf(args);
-    const args_type_info = @typeInfo(args_type);
+pub fn fscanf(stream: std.fs.File, comptime format: []const u8, args: anytype) !usize {
+    var bw = std.io.bufferedReader(stream.reader());
+    const reader = bw.reader();
 
-    if (args_type_info != .Struct) {
+    const args_type = @TypeOf(args);
+
+    if (@typeInfo(args_type) != .Struct) {
         @compileError("expected tuple or struct argument, found " ++ @typeName(args_type));
     }
 
-    var buf: [4096]u8 = undefined;
+    const state_ = struct {
+        var buf: [4096]u8 = undefined;
+    };
+
     comptime var fbuf: [8]u8 = undefined;
     comptime var flen: usize = 0;
 
@@ -172,7 +185,7 @@ pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usiz
 
         // parse format specifier
 
-        var len = try readw(&buf, reader);
+        var len = try readw(&state_.buf, reader);
 
         if (!unspecified)
             len = @min(len, maxbytes);
@@ -182,14 +195,30 @@ pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usiz
         if (opt_fmt_t == null)
             return args_read;
 
-        const fmt_t = opt_fmt_t.?;
+        const fmt_ftype = opt_fmt_t.?.ftype;
+        var fmt_base = opt_fmt_t.?.base;
+        // const fmt_len = opt_fmt_t.?.len;
 
-        arg.*.* = switch (@typeInfo(fmt_t)) {
-            .Int => try std.fmt.parseInt(fmt_t, buf[0..len], 10),
-            .Float => try std.fmt.parseFloat(fmt_t, buf[0..len]),
-            .Pointer => buf[0..len],
+        const start: usize = switch (fmt_base) {
+            0 => blk: {
+                if ((len >= 2 and state_.buf[0] == '0' and state_.buf[1] != 'x') or (len == 1 and state_.buf[0] == '0')) {
+                    fmt_base = 8;
+                    break :blk 1;
+                } else {
+                    break :blk 0;
+                }
+            },
+            8 => if (len >= 1 and state_.buf[0] == '0') 1 else 0,
+            16 => if (len >= 2 and state_.buf[0] == '0' and (state_.buf[1] == 'x' or state_.buf[1] == 'X')) 2 else 0,
+            else => 0,
+        };
+
+        arg.*.* = switch (@typeInfo(fmt_ftype)) {
+            .Int => try std.fmt.parseInt(fmt_ftype, state_.buf[start..len], fmt_base),
+            .Float => try std.fmt.parseFloat(fmt_ftype, state_.buf[0..len]),
+            .Pointer => state_.buf[0..len],
             else => {
-                @compileError("invalid type, found " ++ @typeName(fmt_t));
+                @compileError("invalid type, found " ++ @typeName(fmt_ftype));
             },
         };
 
