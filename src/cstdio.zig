@@ -106,7 +106,8 @@ fn totype(comptime format: []const u8) ?type {
         },
         // TODO: implement strtod conversion
         'a', 'A', 'e', 'E', 'f', 'F', 'g', 'G' => {
-            return if (lf) f80 else f64;
+            // return if (lf) f80 else f64;
+            return f64; // parseFloat for f80 is not supported yet
         },
         's' => {
             return if (wchar) []const u32 else []const u8;
@@ -163,7 +164,7 @@ pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usiz
         comptime var maxbytes: usize = 0;
         comptime var unspecified = true;
 
-        inline while (fbuf[maxbytes] >= '0' and fbuf[maxbytes] <= '9') : (maxbytes += 1) {
+        while (fbuf[maxbytes] >= '0' and fbuf[maxbytes] <= '9') : (maxbytes += 1) {
             unspecified = false;
             if (maxbytes >= fbuf.len)
                 return args_read;
@@ -176,30 +177,23 @@ pub fn fscanf(reader: anytype, comptime format: []const u8, args: anytype) !usiz
         if (!unspecified)
             len = @min(len, maxbytes);
 
-        const fmt_type = totype(fbuf[0..flen]);
+        const opt_fmt_t = totype(fbuf[0..flen]);
 
-        args_read = args_read;
-        _ = arg;
+        if (opt_fmt_t == null)
+            return args_read;
 
-        if (fmt_type == null) {
-            std.debug.print("null\n", .{});
-        } else {
-            std.debug.print("{any}\n", .{fmt_type.?});
-        }
+        const fmt_t = opt_fmt_t.?;
 
-        // if (fmt_type == null)
-        //     return args_read;
-        //
-        // switch (@typeInfo(fmt_type.?)) {
-        //     .Int => {
-        //         arg.*.* = try std.fmt.parseInt(totype(&fbuf), buf[0..len], 10);
-        //     },
-        //     else => {
-        //         @compileError("invalid type, found " ++ @typeName(fmt_type));
-        //     },
-        // }
-        //
-        // args_read += 1;
+        arg.*.* = switch (@typeInfo(fmt_t)) {
+            .Int => try std.fmt.parseInt(fmt_t, buf[0..len], 10),
+            .Float => try std.fmt.parseFloat(fmt_t, buf[0..len]),
+            .Pointer => buf[0..len],
+            else => {
+                @compileError("invalid type, found " ++ @typeName(fmt_t));
+            },
+        };
+
+        args_read += 1;
     }
 
     return 0;
