@@ -1,2 +1,7 @@
 .zig-cache/
 zig-out/
+
+# code to pdf generation
+tmp.*
+src2pdf.sh
+_minted-tmp/
